@@ -12,9 +12,11 @@ The focus of this repository is on the needle-type device, which enables minimal
 **Key Components:**
 
 1. PCB Design
+   
    The repository includes the blueprint of the PCB designed specifically for this project. The board, named "3T_AMS_TSKY-Needle40×120_ver.3," was meticulously designed to accommodate the CMOS image sensor and other necessary components for seamless integration into experimental setups.
 
-2. CMOS Chip Design
+3. CMOS Chip Design
+   
    The heart of the lensless brain-implantable CMOS image sensor is the custom-designed CMOS chip. Using electronic design automation (EDA) tools from Cadence Design Systems, Inc., our team intricately crafted the specifications for the image sensor. The designed data was then transferred to Austria Micro System (AMS), a renowned foundry company specializing in semiconductor fabrication. The chip was fabricated using AMS standard 0.35 µm CMOS technology as part of a multi-chip project.
 
 **Collaboration and Contributions:**
