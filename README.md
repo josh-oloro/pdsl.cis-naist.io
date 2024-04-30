@@ -1,6 +1,8 @@
 # The CIS-NAIST device
 <p align="center"> 
-  **Compact lensless brain-implantable CMOS image sensor developed in NAIST (CIS-NAIST) by the Photonic Device Science Laboratory**
+ <strong>
+  Compact lensless brain-implantable CMOS image sensor developed in NAIST (CIS-NAIST) by the Photonic Device Science Laboratory
+  </strong>
 </p>
 
 **Description:**
