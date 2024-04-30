@@ -1,7 +1,7 @@
 # The CIS-NAIST device
-<center> 
+<p align="center"> 
   Compact lensless brain-implantable CMOS image sensor developed in NAIST (CIS-NAIST) by the Photonic Device Science Laboratory 
-</center>
+</p>
 
 **Description:**
 Welcome to the repository for the lensless brain-implantable CMOS image sensor developed by the Photonic Device Science Lab, led by Prof. Jun Ohta. This innovative device represents a significant advancement in neuronal imaging technology, offering a compact and efficient solution for studying neural activity in vivo.
