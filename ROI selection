@@ -1,0 +1,340 @@
+from datetime import datetime
+import os, pickle
+import numpy as np
+import pandas as pd
+from Codes.information import dictionary
+
+import scipy.ndimage as ndimage
+from scipy.signal import stft, firwin, filtfilt, istft, decimate, correlate
+from scipy.fft import rfft
+
+from skimage.measure import find_contours
+import skimage.morphology as skmorph
+from skimage.filters import threshold_local
+
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score, silhouette_samples
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import matplotlib.cm as cm
+from matplotlib.colors import LogNorm
+from matplotlib.widgets import Slider
+
+plt.rcParams["font.family"] = "Times New Roman"
+plt.rcParams['figure.dpi'] = 300
+
+def CIS_NAIST_to_array(files_directory, find_stim = False):
+    #mouse = files_directory.split('/')[1]
+    
+    listoffiles = os.listdir(files_directory)
+    listoffiles = [file for file in listoffiles if '.raw' in file]
+        
+    listoffiles.sort(key=lambda x: round(float(x.split('_')[2].split('h')[0]) +
+                     float(x.split('_')[2].split('h')[1].split('m')[0])/60 +
+                     float(x.split('_')[2].split('h')[1].split('m')[1].split('s')[0])/3600, 5)*10e14 +
+                     int(x.split('Frame')[1].split('-')[0])
+                     )
+    
+    
+    w = int(listoffiles[0].split('-_W')[1].split('_')[0])
+    h = int(listoffiles[0].split(str(w) + '_H')[1].split('.raw')[0])
+
+    frametimes = []
+    frames_all = []
+    
+    for file in listoffiles:
+        with open(f'{files_directory}/{file}', 'rb') as read_file:
+            softwareVersion = read_file.read(32)
+            currentFileName = read_file.read(128)
+            previousFileName = read_file.read(128)
+            nextFileName = read_file.read(128)
+            chipNo = read_file.read(4)
+            clockMulti = read_file.read(4)
+            settlingClocks = read_file.read(4)
+            startFrameNo = read_file.read(4)
+            FrameTime = np.frombuffer(read_file.read(4), dtype='<f')[0]
+            frametimes.append(FrameTime)
+            read_file.read(27*4)
+    
+            bg = np.frombuffer(read_file.read(w*h*2), dtype='<h')
+    
+            for j in range(1024):
+                FrameNo = read_file.read(4)
+                FrameNo = np.frombuffer(FrameNo, dtype='uint32')
+                read_file.read(15*4)
+                Triggers = read_file.read(1)
+                read_file.read(8*4)
+    
+                try:framedata = np.frombuffer(read_file.read(w*h*2), dtype='<h')
+                except:pass    
+                
+                try:
+                    framedata = np.flip(bg-framedata).reshape(h, w)
+                except:
+                    break
+    
+                frames_all.append(framedata)
+                
+    if 1/np.array(frametimes).mean() < 8: frametimes = np.array(frametimes)/2
+    else: frametimes = np.array(frametimes)
+    fps = 1/frametimes.mean()
+    frames_all = np.array(frames_all)
+    
+    if find_stim == True:
+        frames_all_norm = frames_all - frames_all[10000:10100].mean(axis = 0)
+        F_ts = np.mean(frames_all_norm, axis = (1,2))
+        
+        frametime = frametimes.mean()
+        timeaxis = np.round(np.arange(0, len(frames_all_norm))*frametime/60,decimals = 2)
+        
+        n_frames = len(frames_all)
+        frame_ave = np.mean(frames_all_norm, axis = 0)
+        
+        # creating figure
+        fig, (frameimage,
+              clrbr,
+              Fvstime,
+              frameaxis,
+              vminaxis,
+              vmaxaxis
+              ) = plt.subplots(ncols=6, figsize=(20, 11.25))
+        
+        frameimage.imshow(frames_all_norm[0])  # make frame image
+        # get current vmin and vmax
+        #minimum, maximum = frameimage.images[0].get_clim()
+        minimum, maximum = frameimage.images[0].get_clim()
+        matplotlib.colorbar.Colorbar(clrbr, mappable=frameimage.images[0])  # colorbar
+        Fvstime.plot(timeaxis, F_ts, 'b', alpha = 0)
+        Fvstime.set_xlim(np.nanpercentile(timeaxis, (0,100)))
+        Fvsframe = Fvstime.twiny()
+        Fvsframe.plot(F_ts, 'k')  # plot F_ts
+        Fvsframe.set_xlim(1, n_frames)  # setting bounds for x axis
+        Fvsframe.axvline(x=1, color='r')  # moving line
+        Fvsframe.set_xlabel('Frames')
+        Fvstime.set_xlabel('Time, mins')
+        
+        # create grid
+        for i in range(w-1):
+            frameimage.axvline(x=i+0.5, color='k')
+        for i in range(h-1):
+            frameimage.axhline(y=i+0.5, color='k')
+        
+        # repositioning
+        frameimage.set_position([0.03, 0.025, .2, .95])
+        clrbr.set_position([0.25, 0.025, .02, .95])
+        Fvsframe.set_position([.37, .4, .55, .55])
+        Fvstime.set_position([.37, .4, .55, .55])
+        frameaxis.set_position([0.4, 0.25, 0.5, 0.02])
+        vminaxis.set_position([0.4, 0.16, 0.5, 0.02])
+        vmaxaxis.set_position([0.4, 0.07, 0.5, 0.02])
+        
+        # making frameno slider
+        frame_slider = Slider(  # this is the value of the slider
+            ax=frameaxis,
+            label='Frame No.',
+            valmin=1,
+            valmax=n_frames,
+            valinit=1,
+        )
+        
+        # making vmin slider
+        vmin_slider = Slider(  # this is the value of the slider
+            ax=vminaxis,
+            label='Minimum',
+            valmin=frames_all_norm[~np.isnan(frames_all_norm.mean(axis = (1,2)))].min(),
+            valmax=frames_all_norm[~np.isnan(frames_all_norm.mean(axis = (1,2)))].max(),
+            valinit=minimum,
+        )
+        
+        # making vmax slider
+        vmax_slider = Slider(  # this is the value of the slider
+            ax=vmaxaxis,
+            label='Maximum',
+            valmin=frames_all_norm[~np.isnan(frames_all_norm.mean(axis = (1,2)))].min(),
+            valmax=frames_all_norm[~np.isnan(frames_all_norm.mean(axis = (1,2)))].max(),
+            valinit=maximum,
+        )
+        
+        # what happens when any of sliders is updated
+        def n_frame_update(val):
+            val -= 1
+            frameimage.images[0].set_data(frames_all_norm[int(val)])
+            Fvsframe.lines[1].set_xdata([frame_slider.val, frame_slider.val])
+                
+        def clim_update(val):
+            frameimage.images[0].set_clim(vmin=vmin_slider.val,
+                                          vmax=vmax_slider.val)
+        
+        frame_slider.on_changed(n_frame_update)
+        vmin_slider.on_changed(clim_update)
+        vmax_slider.on_changed(clim_update)
+    
+    return [frames_all, fps]
+
+def generate_mask(frames, mouse, i_stim, fps, duration, exportname):
+    s1, f1, a1, s2, f2, a2 = 1.5, 3, 0, 1.5, 3, 6
+    h, w = frames.shape[1:]
+    
+    try:
+        mask = pickle.load(open(f'Pickles/{mouse}_mask_min {duration}_s{s1}_f{f1}_a{a1}_s{s2}_f{f2}_a{a2}.pickle', 'rb'))
+    
+    except:
+        frame_ref = frames[:i_stim].mean(axis = 0)
+        frames = (frames - frame_ref)/np.abs(frame_ref)
+        frames = frames[i_stim:i_stim + int(np.ceil(duration*60*fps))]
+        
+        frames_binary = np.empty_like(frames)
+        
+        t_start = datetime.now()
+        for i, frame in enumerate(frames):
+            mask = np.where(frame > threshold_local(frame, 9, 'gaussian', offset = 0, param = s1), True, False)
+            mask = skmorph.binary_opening(mask, footprint=(np.ones((f1, f1))))
+            #mask = skmorph.area_opening(mask, a1, 1)
+            mask[:,:5], mask[:,-5:], mask[:5,:], mask[-5:,:] = False, False, False, False
+            frames_binary[i] = np.where(mask == True, 1, 0)
+            
+        print(f'ROI calculation took {datetime.now() - t_start}')
+        
+        mask = frames_binary.mean(axis = 0)
+        
+        mask = np.where(mask > threshold_local(mask, 9, 'gaussian', offset = 0, param = s2), True, False)
+        mask = skmorph.binary_opening(mask, footprint=(np.ones((f2, f2))))
+        mask = skmorph.area_opening(mask, a2, 1)
+        
+        pickle.dump(mask, open(f'Pickles/{mouse}_mask_min {duration}_s{s1}_f{f1}_a{a1}_s{s2}_f{f2}_a{a2}.pickle', 'wb'))
+        
+    h_fig = 10
+    w_fig = h_fig/h*w    
+    
+    fig, ax = plt.subplots(figsize = ((w_fig, h_fig)))
+    ax.imshow(mask, cmap = 'gray', aspect = 'auto', vmin = 0, vmax = 1)
+    ax.set_position([0,0,1,1])
+    fig.savefig(f'{exportname}_ROI mask.png')
+    
+    plt.close('all')
+    
+    return mask
+
+def subtract_noise(tsa, subtract, fps, i_stim):
+    if len(subtract.shape) == 1:
+        f, t, spec_noise = stft(subtract, fs = fps, nperseg = 250, nfft = 250, return_onesided=False)
+        specs_signal = [stft(ts, fs = fps, nperseg=250, nfft = 250, return_onesided=False) for ts in tsa]
+        specs_signal = [spec_signal - spec_noise for f, t, spec_signal in specs_signal]
+        
+        tsa_signal = [istft(spec_signal, fs = fps, nperseg=250, nfft = 250, input_onesided=False)
+                      for spec_signal in specs_signal]
+        return np.array([np.real(ts) for t, ts in tsa_signal]) + np.median(subtract[:i_stim])
+    
+    else:
+        tsa_signal = []
+        for signal, noise in zip(tsa, subtract):
+            f, t, spec_noise = stft(noise, fs = fps, nperseg = 250, nfft = 250, return_onesided=False)
+            f, t, spec_signal = stft(signal, fs = fps, nperseg = 250, nfft = 250, return_onesided=False)
+            t, x = istft(spec_signal - spec_noise, fs = fps, nperseg=250, nfft = 250, input_onesided=False)
+            tsa_signal.append(np.real(x) + np.median(signal[:i_stim]))
+        return np.array(tsa_signal)
+
+mice = os.listdir('Imaging Data')
+n_mice = len(mice)
+
+start_t = datetime.now()
+for i_mouse, mouse in enumerate(mice):
+    print(f'\n{mouse} ({i_mouse+1} of {n_mice} mice)')
+    files_directory = f'Imaging Data/{mouse}'
+
+    frames, fps = CIS_NAIST_to_array(files_directory)
+    h, w = frames.shape[1:]
+
+    microdialysis, [i_stim, cut_index] = dictionary[mouse]
+
+    if i_stim[1] - i_stim[0] < 0:
+        print(f'{mouse}. Stim frame error')
+        continue
+
+    # Remove unresponsive pixels
+    top, left, right, bottom = cut_index
+
+    mask_tb = list(range(top)) + list(range(h-bottom, h))
+    mask_lr = list(range(left)) + list(range(w-right, w))
+    h, w = h-top-bottom, w-left-right
+
+    frames = np.delete(frames, mask_tb, axis=1)
+    frames = np.delete(frames, mask_lr, axis=2).astype(float)
+
+    duration = 60  # minutes
+
+    # Remove stimulation frames
+    frames = np.concatenate((frames[:i_stim[0]], frames[i_stim[1]:]))
+
+    # Remove excess poststim frames
+    frames = frames[:int(i_stim[0] + np.ceil((duration+5)*60*fps))]
+
+    # Remove excess prestim frames
+    if 15*60*fps < i_stim[0]:
+        frames = frames[i_stim[0] - int(np.ceil(15*60*fps)):]
+        i_stim = int(np.ceil(15*60*fps))  # set new stim index
+    else:
+        i_stim = i_stim[0]  # if no need to remove
+
+    if i_stim == 0: continue  # skip files with no prestim
+
+    # Make and set saving directory
+    try: os.mkdir(f'Figures/{mouse}')
+    except: pass
+    exportname = f'Figures/{mouse}/{mouse}'
+
+    # Frames average and global binarization
+    frames_mean = frames[i_stim:].mean(axis=0)
+    global_binarization = threshold_mean(frames_mean) > frames_mean
+    
+    # Local binarization of frames average
+    mask = threshold_local(frames_mean, 9, 'gaussian', param=1.5)
+    mask = frames_mean > mask
+    mask = skmorph.binary_opening(mask,
+                                  footprint=(np.ones((2, 2))
+                                             )
+                                  )
+    mask = skmorph.area_opening(mask, 9, 1)
+    mask[:,:5], mask[:,-5:], mask[:5,:], mask[-5:,:] = False, False, False, False
+    local_binarization = mask.copy()
+
+    # Save frame average, local binarization and global binarization
+    h_fig = 10
+    w_fig = h_fig/h*w
+
+    fig, ax = plt.subplots(figsize=((w_fig, h_fig)))
+    ax.imshow(frames_mean, interpolation='none', aspect='auto')
+    ax.set_position([0, 0, 1, 1])
+    fig.savefig(f'{exportname}_frames_mean.png')
+
+    ax.images[0].set(data= global_binarization, cmap = 'gray_r', clim=[0, 1])
+    fig.savefig(f'{exportname}_global binarization mask.png')
+
+    ax.images[0].set(data= local_binarization, cmap = 'gray_r', clim=[0, 1])
+    fig.savefig(f'{exportname}_local binarization mask.png')
+    
+    # ROI algorithm
+    mask = generate_mask(frames, mouse, i_stim, fps,
+                         duration=60, exportname=exportname)
+    
+    # Average frames
+    generate_frame_averages(frames, mouse, fps, i_stim, exportname=exportname)
+
+    # Save as mp4
+    frame_ref = frames[:i_stim].mean(axis = 0)
+    frames_baselined = (frames - frame_ref)/np.abs(frame_ref)*100
+    save_as_video3(frames_baselined[:i_stim + np.ceil(60*60*fps).astype(int)], fps, exportname, i_stim, scales = [3], speeds = [1, 10])
+    save_as_video3(frames_baselined[:i_stim + np.ceil(60*60*fps).astype(int)], fps, exportname, i_stim, scales = [3], speeds = [1, 10], timestamps = [-1,3])
+
+    # ROI traces
+    F_all = generate_ROI_traces(frames, mask) # returns roi traces, not-roi trace and whole frame trace
+    F_noise = F_all[-2] #not roi trace is non-ROI pixels trace
+    F_all = np.delete(F_all, -2, axis = 0)
+    
+    # subtract noise
+    F_subtracted = subtract_noise(F_all, F_noise, fps, i_stim)  
+    F_subtracted = F_subtracted[:,:int(i_stim + np.ceil((duration)*60*fps))] # remove excess poststim frame
